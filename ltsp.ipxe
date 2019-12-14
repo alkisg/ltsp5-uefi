@@ -1,0 +1,115 @@
+#!ipxe
+# This file is part of LTSP, https://ltsp.org
+# Copyright 2019 the LTSP team, see AUTHORS
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Configure iPXE for LTSP
+# Documentation=man:ltsp-ipxe(8)
+
+# Set the default image (img) based on arch, or to root-path if it's not empty
+cpuid --ext 29 && set img amd64 || set img i386
+isset ${root-path} && set img ${root-path} ||
+isset ${proxydhcp/dhcp-server} && set srv ${proxydhcp/dhcp-server} || set srv ${next-server}
+
+# Define cmdline parameters common to all LTSP clients
+set cmdline_ltsp init=/sbin/init-ltsp forcepae BOOTIF=01-${mac:hexhyp} ip=${ip}:${srv}:${gateway}:${netmask}
+
+goto ${mac} || goto start
+# The following client-specific settings can be defined in ltsp.conf:
+# DEFAULT_IMAGE (img): default menu item for that client
+# KERNEL_PARAMETERS (cmdline_client): additional kernel parameters
+# MENU_TIMEOUT (menu-timeout): menu milliseconds, 0=forever, -1=hide menu
+# For those clients, :mac:address sections are generated below
+
+:61:6c:6b:69:73:67
+
+:start
+# To completely hide the menu, set menu-timeout to -1
+isset ${menu-timeout} || set menu-timeout 5000
+iseq "${menu-timeout}" "-1" && goto ${img} ||
+menu iPXE boot menu - ${hostname}:${srv}:${root-path} || goto ${img}
+item --gap                        Boot an image from the network in LTSP mode:
+item --key 1 amd64                Ubuntu MATE 18.04 (64 bit)
+item --key 2 i386                 Ubuntu MATE 18.04 (32 bit)
+item
+item --gap                        Other options:
+item --key m memtest              Memory test
+item --key c config               Enter iPXE configuration
+item --key s shell                Drop to iPXE shell
+item --key d disk                 Boot from the first local disk
+item
+item --key x exit                 Exit iPXE and continue BIOS boot
+choose --timeout ${menu-timeout} --default ${img} img || goto cancel
+goto ${img}
+
+:amd64
+:i386
+:images
+# The "images" method can boot anything in /opt/ltsp/images
+# LTSP5 NBD:
+set cmdline_method root=/dev/nbd0 nbdroot=${srv}:/opt/ltsp/${img}
+# LTSP5 squashfs over NFS:
+# set cmdline_method root=/dev/nfs nfsroot=${srv}:/opt/ltsp/${img} ltsploop=images/${img}.img
+goto ltsp
+
+:roots
+# The "roots" method can boot all /opt/ltsp/roots
+set cmdline_method root=/dev/nfs nfsroot=${srv}:/srv/ltsp/${img}
+goto ltsp
+
+:ltsp
+# :images and :roots jump here after setting cmdline_method
+set cmdline ${cmdline_method} ${cmdline_ltsp} ${cmdline_client}
+# At this point we must check for UEFI clients booting a 32bit OS
+iseq ${platform} efi || goto no_uefi_i386
+iseq ${img} i386 || goto no_uefi_i386
+goto uefi_i386
+:no_uefi_i386
+# In EFI mode, iPXE requires initrds to be specified in the cmdline
+kernel /ltsp/${img}/vmlinuz initrd=initrd.img ${cmdline}
+initrd /ltsp/${img}/initrd.img
+boot || goto failed
+
+:uefi_i386
+# This now is an UEFI client booting a 32bit OS. iPXE can't handle that.
+# But grub fails with proxyDHCP: https://savannah.gnu.org/bugs/index.php?55636
+# Using both of them works fine!
+# To simplify grub.cfg, we pass root-path=${cmdline} and filename=${initrd}
+set net0/dhcp-server ${srv}
+set net0/next-server ${srv}
+set net0/root-path /ltsp/${img}/vmlinuz ${cmdline}
+set net0/filename /ltsp/${img}/initrd.img
+kernel /grub/grubnetx64.efi.signed
+boot || goto failed
+
+:memtest
+iseq ${platform} pcbios && kernel memtest.0 || kernel memtest.efi
+# Boot "fails" on normal memtest exit with Esc, so show the menu again
+boot ||
+goto start
+
+:config
+config
+goto start
+
+:shell
+echo Type 'exit' to get the back to the menu
+shell
+goto start
+
+:disk
+# Boot the first local HDD
+sanboot --no-describe --drive 0x80 || goto failed
+
+:exit
+# Exit with error, to fall back to the next boot option
+# http://forum.ipxe.org/showthread.php?tid=6775
+exit 1
+
+:cancel
+echo You cancelled the menu, dropping to shell
+goto shell
+
+:failed
+echo Booting failed, dropping to shell
+goto shell

@@ -1,0 +1,70 @@
+#!/bin/sh
+# This file is part of LTSP, https://ltsp.org
+# Copyright 2019 the LTSP team, see AUTHORS
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Unofficial UEFI netbooting support for LTSP5
+
+die() {
+    printf "%s\n" "$*" >&2
+    exit 1
+}
+
+length_to_netmask() {
+    local nm
+
+    nm=$((0xffffffff ^ ((1 << (32 - $1)) - 1)))
+    printf "%d.%d.%d.%d\n" "$(((nm >> 24) & 0xff))" \
+        "$(((nm >> 16) & 0xff))" "$(((nm >> 8) & 0xff))" "$((nm & 0xff))"
+}
+
+proxy_dhcp() {
+    local cidr _dummy subnet netmask separator
+
+    ip route show | while read -r cidr _dummy; do
+        subnet=${cidr%%/*}
+        case "$subnet" in
+            127.0.0.1|169.254.0.0|192.168.67.0|*[!0-9.]*)
+                continue
+                ;;
+            *)  # Ignore single IP routes, like vbox NAT gateway
+                test "$cidr" != "${cidr#*/}" || continue
+                netmask=$(length_to_netmask "${cidr#*/}")
+                # echo in dash translates "\n", use printf to keep it
+                printf "%sdhcp-range=set:proxy,%s,proxy,%s" \
+                    "${separator}" "$subnet" "$netmask"
+                # Insert a separator only after the first line
+                separator="\n"
+                ;;
+        esac
+    done
+}
+
+set -e
+# These are available in the Greek schools PPA
+apt install --yes ltsp-binaries
+
+mkdir -p /var/lib/tftpboot/grub
+cd /var/lib/tftpboot/grub
+wget http://archive.ubuntu.com/ubuntu/dists/focal/main/uefi/grub2-amd64/current/grubnetx64.efi.signed -O grubnetx64.efi.signed
+wget https://raw.githubusercontent.com/alkisg/ltsp5-uefi/master/grub.cfg -O grub.cfg
+
+cd /var/lib/tftpboot/ltsp
+ln -rsf /usr/share/ltsp/binaries/memtest.0 .
+ln -rsf /usr/share/ltsp/binaries/memtest.efi .
+ln -rsf /usr/share/ltsp/binaries/snponly.efi .
+ln -rsf /usr/share/ltsp/binaries/undionly.kpxe .
+wget https://raw.githubusercontent.com/alkisg/ltsp5-uefi/master/ltsp.ipxe -O ltsp.ipxe
+
+test -d amd64 || sed 's/.*key 1 amd64/# &/' -i ltsp.ipxe
+test -d i386 || sed 's/.*key 2 i386/# &/' -i ltsp.ipxe
+
+wget https://raw.githubusercontent.com/alkisg/ltsp5-uefi/master/ltsp-server-dnsmasq.conf -O /etc/dnsmasq.d/ltsp-server-dnsmasq.conf
+proxy=$(proxy_dhcp)
+if [ -n "$proxy" ]; then
+    sed "s/.*=set:proxy,.*/$proxy/" -i /etc/dnsmasq.d/ltsp-server-dnsmasq.conf
+fi
+
+systemctl restart dnsmasq
+
+echo "The ltsp5-uefi installer finished without errors"
