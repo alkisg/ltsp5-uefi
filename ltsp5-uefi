@@ -1,6 +1,6 @@
 #!/bin/sh
 # This file is part of LTSP, https://ltsp.org
-# Copyright 2019 the LTSP team, see AUTHORS
+# Copyright 2019-2020 the LTSP team, see AUTHORS
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # Unofficial UEFI netbooting support for LTSP5
@@ -46,7 +46,8 @@ apt install --yes ltsp-binaries
 
 mkdir -p /var/lib/tftpboot/grub
 cd /var/lib/tftpboot/grub
-wget http://archive.ubuntu.com/ubuntu/dists/focal/main/uefi/grub2-amd64/current/grubnetx64.efi.signed -O grubnetx64.efi.signed
+# This is grub2 1.136 for booting 32bit kernels under UEFI, see LP: #1876737
+wget https://raw.githubusercontent.com/alkisg/ltsp5-uefi/master/grubnetx64.efi.signed -O grubnetx64.efi.signed
 wget https://raw.githubusercontent.com/alkisg/ltsp5-uefi/master/grub.cfg -O grub.cfg
 
 cd /var/lib/tftpboot/ltsp
